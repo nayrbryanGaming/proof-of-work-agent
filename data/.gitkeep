@@ -1,0 +1,5 @@
+# POW Agent Data Directory
+# This directory stores persistent state and runtime data
+
+*.json
+!.gitkeep

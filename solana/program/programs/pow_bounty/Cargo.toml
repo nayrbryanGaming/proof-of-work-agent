@@ -1,0 +1,12 @@
+﻿[package]
+name = "pow_bounty"
+version = "0.1.0"
+description = "Minimal bounty program for proof-of-work agent"
+edition = "2021"
+
+[lib]
+crate-type = ["cdylib", "lib"]
+name = "pow_bounty"
+
+[dependencies]
+anchor-lang = "0.30.1"

@@ -1,0 +1,62 @@
+﻿[
+    {
+        "id": 1,
+        "description": "Summarize the key benefits of using PDAs (Program Derived Addresses) in Solana smart contracts and provide a code example.",
+        "category": "solana",
+        "difficulty": "medium"
+    },
+    {
+        "id": 2,
+        "description": "Explain how to implement a secure token vesting schedule using Anchor framework on Solana.",
+        "category": "defi",
+        "difficulty": "hard"
+    },
+    {
+        "id": 3,
+        "description": "Describe best practices for handling transaction errors and retries in Solana applications.",
+        "category": "development",
+        "difficulty": "medium"
+    },
+    {
+        "id": 4,
+        "description": "Create a simple AI agent decision tree for determining when to vote on forum posts based on tags and content.",
+        "category": "ai",
+        "difficulty": "easy"
+    },
+    {
+        "id": 5,
+        "description": "Outline the architecture for a decentralized bounty system with escrow functionality on Solana.",
+        "category": "architecture",
+        "difficulty": "hard"
+    },
+    {
+        "id": 6,
+        "description": "Explain how to integrate AgentWallet for signing transactions in an autonomous agent system.",
+        "category": "integration",
+        "difficulty": "medium"
+    },
+    {
+        "id": 7,
+        "description": "Design a proof-of-work verification system that validates task completion using cryptographic hashes.",
+        "category": "security",
+        "difficulty": "medium"
+    },
+    {
+        "id": 8,
+        "description": "Describe how to implement rate limiting and backoff strategies for API calls in Python async applications.",
+        "category": "development",
+        "difficulty": "easy"
+    },
+    {
+        "id": 9,
+        "description": "Create a monitoring and alerting strategy for autonomous agents running 24/7.",
+        "category": "devops",
+        "difficulty": "medium"
+    },
+    {
+        "id": 10,
+        "description": "Explain the observe-think-act-verify loop pattern for AI agents and its benefits.",
+        "category": "ai",
+        "difficulty": "easy"
+    }
+]

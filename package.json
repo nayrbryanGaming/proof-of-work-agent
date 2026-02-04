@@ -1,0 +1,20 @@
+{
+  "name": "pow-agent-monorepo",
+  "version": "1.0.0",
+  "private": true,
+  "workspaces": [
+    "dashboard"
+  ],
+  "scripts": {
+    "dev:dashboard": "cd dashboard && npm run dev",
+    "build:dashboard": "cd dashboard && npm run build",
+    "start:dashboard": "cd dashboard && npm run start",
+    "dev:api": "python run_api.py",
+    "dev": "concurrently \"npm run dev:api\" \"npm run dev:dashboard\"",
+    "lint": "cd dashboard && npm run lint",
+    "type-check": "cd dashboard && npm run type-check"
+  },
+  "devDependencies": {
+    "concurrently": "^8.2.2"
+  }
+}

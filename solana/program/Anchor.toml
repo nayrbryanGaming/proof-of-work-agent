@@ -1,0 +1,16 @@
+﻿[features]
+seeds = true
+skip-lint = false
+
+[programs.devnet]
+pow_bounty = "4Jg9fBRCYguygWsYzZEuFaDfpWH5Ffxa7LQLwnatuh5r"
+
+[programs.localnet]
+pow_bounty = "4Jg9fBRCYguygWsYzZEuFaDfpWH5Ffxa7LQLwnatuh5r"
+
+[provider]
+cluster = "devnet"
+wallet = "~/.config/solana/id.json"
+
+[scripts]
+test = "anchor test"

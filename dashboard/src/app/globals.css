@@ -1,0 +1,128 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  --foreground-rgb: 255, 255, 255;
+  --background-start-rgb: 10, 10, 20;
+  --background-end-rgb: 20, 20, 40;
+}
+
+body {
+  color: rgb(var(--foreground-rgb));
+  background: linear-gradient(
+    135deg,
+    rgb(var(--background-start-rgb)),
+    rgb(var(--background-end-rgb))
+  );
+  min-height: 100vh;
+}
+
+@layer utilities {
+  .text-balance {
+    text-wrap: balance;
+  }
+}
+
+@layer components {
+  .card {
+    @apply bg-gray-800/50 backdrop-blur-sm border border-gray-700/50 rounded-xl p-6;
+  }
+  
+  .card-hover {
+    @apply card transition-all duration-300 hover:border-primary-500/50 hover:shadow-lg hover:shadow-primary-500/10;
+  }
+  
+  .btn-primary {
+    @apply px-4 py-2 bg-gradient-to-r from-solana-purple to-solana-green text-white font-medium rounded-lg 
+           transition-all duration-300 hover:opacity-90 hover:shadow-lg hover:shadow-solana-purple/25
+           disabled:opacity-50 disabled:cursor-not-allowed;
+  }
+  
+  .btn-secondary {
+    @apply px-4 py-2 bg-gray-700 text-white font-medium rounded-lg 
+           transition-all duration-300 hover:bg-gray-600
+           disabled:opacity-50 disabled:cursor-not-allowed;
+  }
+  
+  .btn-danger {
+    @apply px-4 py-2 bg-red-600 text-white font-medium rounded-lg 
+           transition-all duration-300 hover:bg-red-500
+           disabled:opacity-50 disabled:cursor-not-allowed;
+  }
+  
+  .status-dot {
+    @apply w-3 h-3 rounded-full;
+  }
+  
+  .status-dot-running {
+    @apply status-dot bg-solana-green animate-pulse;
+  }
+  
+  .status-dot-stopped {
+    @apply status-dot bg-red-500;
+  }
+  
+  .status-dot-idle {
+    @apply status-dot bg-yellow-500;
+  }
+
+  .glow-green {
+    box-shadow: 0 0 20px rgba(20, 241, 149, 0.3);
+  }
+  
+  .glow-purple {
+    box-shadow: 0 0 20px rgba(153, 69, 255, 0.3);
+  }
+}
+
+/* Custom scrollbar */
+::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+
+::-webkit-scrollbar-track {
+  background: rgba(255, 255, 255, 0.05);
+  border-radius: 4px;
+}
+
+::-webkit-scrollbar-thumb {
+  background: rgba(255, 255, 255, 0.1);
+  border-radius: 4px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: rgba(255, 255, 255, 0.2);
+}
+
+/* Animation for metrics */
+@keyframes countUp {
+  from {
+    opacity: 0;
+    transform: translateY(10px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.animate-count-up {
+  animation: countUp 0.5s ease-out forwards;
+}
+
+/* Log level colors */
+.log-debug { @apply text-gray-400; }
+.log-info { @apply text-blue-400; }
+.log-warning { @apply text-yellow-400; }
+.log-error { @apply text-red-400; }
+
+/* Terminal-style log display */
+.log-terminal {
+  @apply font-mono text-sm bg-black/50 rounded-lg p-4 overflow-auto max-h-96;
+}
+
+.log-entry {
+  @apply py-1 border-b border-gray-800/50 last:border-0;
+}
