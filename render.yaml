@@ -1,0 +1,37 @@
+# ==============================================================================
+# Render Blueprint - POW Agent Background Worker
+# Deploy directly from GitHub
+# ==============================================================================
+
+services:
+  # Main Agent Worker - Runs 24/7
+  - type: worker
+    name: pow-agent-worker
+    runtime: python
+    buildCommand: pip install -r requirements.txt
+    startCommand: bash start.sh
+    plan: free
+    envVars:
+      - key: PYTHON_VERSION
+        value: "3.11.0"
+      - key: ENVIRONMENT
+        value: production
+      - key: LOG_LEVEL
+        value: INFO
+      - key: LOOP_INTERVAL
+        value: "1800"
+      # Required - Set these in Render Dashboard
+      - key: COLOSSEUM_API_KEY
+        sync: false
+      - key: OPENAI_API_KEY
+        sync: false
+      - key: AGENTWALLET_SESSION
+        sync: false
+      - key: SOLANA_RPC
+        value: "https://api.devnet.solana.com"
+      - key: PROGRAM_ID
+        sync: false
+      - key: SOLANA_PRIVATE_KEY
+        sync: false
+    autoDeploy: true
+    region: oregon

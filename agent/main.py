@@ -5,13 +5,19 @@ Proof-of-Work Agent - Main Entry Point
 An autonomous AI agent for the Colosseum Solana Agent Hackathon that demonstrates
 the observe → think → act → verify loop.
 
+This is a long-running daemon (NOT a web server) designed for:
+- Render Background Worker (FREE tier)
+- 24/7 operation with automatic restarts
+
 Usage:
     python agent/main.py
 """
 
 import asyncio
+import os
 import signal
 import sys
+import traceback
 from pathlib import Path
 
 # Add parent directory to path for imports
@@ -93,6 +99,8 @@ async def main():
             pass
     
     log.info("Starting Proof-of-Work Agent...")
+    log.info(f"PID: {os.getpid()}")
+    log.info(f"Python: {sys.version}")
     
     try:
         # Run the agent loop forever
@@ -109,10 +117,18 @@ async def main():
 
 
 if __name__ == "__main__":
+    import os
+    
+    # Ensure we're in the right directory
+    script_dir = Path(__file__).resolve().parent.parent
+    os.chdir(script_dir)
+    
     try:
         asyncio.run(main())
     except KeyboardInterrupt:
         print("\nShutdown requested, exiting...")
     except Exception as e:
         print(f"Fatal error: {e}")
+        import traceback
+        traceback.print_exc()
         sys.exit(1)

@@ -4,7 +4,16 @@
 ![Solana](https://img.shields.io/badge/Solana-Devnet-green)
 ![License](https://img.shields.io/badge/License-MIT-yellow)
 
-An autonomous AI agent for the Colosseum Solana Agent Hackathon that demonstrates the **observe → think → act → verify** loop. Complete with production-ready API backend and real-time dashboard.
+An autonomous AI agent for the Colosseum Solana Agent Hackathon that demonstrates the **observe → think → act → verify** loop.
+
+## ⚠️ ARCHITECTURE
+
+**This is a long-running Python daemon, NOT a web server.**
+
+- Runs 24/7 as a background worker
+- Designed for **Render Background Worker** (FREE tier)
+- NO FastAPI, NO Express, NO serverless functions
+- Pure asyncio event loop
 
 ## 🚀 Features
 
@@ -12,53 +21,40 @@ An autonomous AI agent for the Colosseum Solana Agent Hackathon that demonstrate
 - 📊 **Decision Engine** - Uses `/agents/status` as decision signal
 - 💬 **Forum Engagement** - Reads, votes, and comments meaningfully on forum posts
 - 📝 **Project Management** - Creates and updates project drafts automatically
-- ⛓️ **Blockchain Integration** - Deploys and uses Anchor bounty program on Solana devnet
+- ⛓️ **Blockchain Integration** - Pure Python Solana client with Ed25519 signing
 - 🔐 **Secure Signing** - Uses AgentWallet session for transaction signing
 - 📋 **Full Logging** - All activity logged with structured format
-- 🎛️ **Dashboard** - Real-time monitoring dashboard with WebSocket updates
-- 🔧 **REST API** - Complete API for control and monitoring
-- 🐳 **Docker Ready** - Containerized for easy deployment
-- ☁️ **Vercel Ready** - Dashboard deployable to Vercel
+- ☁️ **Render Ready** - One-click deploy to Render FREE tier
 
 ## 📁 Project Structure
 
 ```
 pow-agent/
 ├── agent/                   # Core agent logic
-│   ├── main.py             # Entry point
+│   ├── main.py             # Entry point (daemon)
 │   ├── loop.py             # Main async loop
 │   ├── heartbeat.py        # Heartbeat checker
 │   ├── decision.py         # AI decision engine
 │   ├── logger.py           # Structured logging
 │   ├── config.py           # Configuration loader
-│   ├── state.py            # State management
-│   ├── validators.py       # Input validation
-│   └── circuit_breaker.py  # Fault tolerance
-├── api/                    # FastAPI backend
-│   ├── server.py           # API server
-│   ├── routes.py           # REST endpoints
-│   └── websocket.py        # WebSocket manager
+│   └── state.py            # State management
 ├── colosseum/              # Colosseum API integration
-│   ├── api.py              # API wrapper
+│   ├── api.py              # API wrapper with retry
 │   ├── forum.py            # Forum logic
 │   ├── project.py          # Project management
 │   └── status.py           # Status handling
 ├── solana/                 # Solana integration
-│   ├── client.py           # Transaction client
+│   ├── client.py           # Pure Python Solana client
 │   └── program/            # Anchor program
 │       ├── Anchor.toml
 │       └── programs/pow_bounty/src/lib.rs
-├── dashboard/              # Next.js frontend
-│   ├── src/app/           # App router pages
-│   ├── src/components/    # React components
-│   └── src/hooks/         # Custom hooks
 ├── data/                   # Persistent state
 ├── logs/                   # Log files
 ├── prompts/                # AI prompts
 ├── tasks/                  # Task definitions
-├── docker-compose.yml      # Docker orchestration
-├── Dockerfile              # Backend container
-├── vercel.json             # Vercel config
+├── Procfile                # Render entry point
+├── start.sh                # Startup script
+├── render.yaml             # Render Blueprint
 └── requirements.txt        # Python dependencies
 ```
 
@@ -66,7 +62,7 @@ pow-agent/
 
 ### Required Software
 
-1. **Python 3.10+**
+1. **Python 3.11+**
 ```bash
 # Windows
 winget install Python.Python.3.11
@@ -78,33 +74,20 @@ brew install python@3.11
 sudo apt install python3.11 python3.11-venv
 ```
 
-2. **Node.js 18+** (for dashboard)
-```bash
-# Windows
-winget install OpenJS.NodeJS.LTS
-
-# macOS
-brew install node@20
-
-# Linux
-curl -fsSL https://deb.nodesource.com/setup_20.x | sudo -E bash -
-sudo apt install nodejs
-```
-
-3. **Rust and Cargo** (for Anchor)
+2. **Rust and Cargo** (for Anchor program deployment)
 ```bash
 curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
 rustup default stable
 ```
 
-4. **Solana CLI**
+3. **Solana CLI**
 ```bash
 sh -c "$(curl -sSfL https://release.solana.com/v1.18.4/install)"
 export PATH="$HOME/.local/share/solana/install/active_release/bin:$PATH"
 solana --version
 ```
 
-5. **Anchor CLI**
+4. **Anchor CLI**
 ```bash
 cargo install --git https://github.com/coral-xyz/anchor avm --locked --force
 avm install latest
@@ -117,11 +100,11 @@ anchor --version
 ### 1. Clone and Setup
 
 ```bash
-git clone https://github.com/YOUR_USERNAME/pow-agent.git
-cd pow-agent
+git clone https://github.com/nayrbryanGaming/proof-of-work-agent.git
+cd proof-of-work-agent/pow-agent
 ```
 
-### 2. Configure Solana
+### 2. Configure Solana Devnet
 
 ```bash
 # Set to devnet
@@ -130,8 +113,11 @@ solana config set --url devnet
 # Generate keypair (if needed)
 solana-keygen new --outfile ~/.config/solana/id.json
 
-# Get devnet SOL
+# Get devnet SOL (run multiple times if needed)
 solana airdrop 2
+
+# Check balance
+solana balance
 ```
 
 ### 3. Deploy Anchor Program
@@ -140,7 +126,7 @@ solana airdrop 2
 cd solana/program
 anchor build
 anchor deploy
-# Note the Program ID from output
+# Note the Program ID from output - you'll need this!
 ```
 
 ### 4. Configure Environment
@@ -149,86 +135,79 @@ anchor deploy
 # Copy example config
 cp .env.example .env
 
-# Edit with your values
-# Required:
-#   COLOSSEUM_API_KEY
-#   OPENAI_API_KEY
-#   AGENTWALLET_SESSION
-#   PROGRAM_ID (from step 3)
+# Edit with your values - REQUIRED:
+# - COLOSSEUM_API_KEY
+# - OPENAI_API_KEY  
+# - AGENTWALLET_SESSION (your Solana keypair)
+# - PROGRAM_ID (from anchor deploy)
 ```
 
-### 5. Install Dependencies
+### 5. Run Locally
 
 ```bash
-# Python backend
+# Create virtual environment
 python -m venv venv
 source venv/bin/activate  # Linux/macOS
 # or: venv\Scripts\activate  # Windows
+
+# Install dependencies
 pip install -r requirements.txt
 
-# Dashboard
-cd dashboard
-npm install
-cd ..
-```
-
-### 6. Run the Agent
-
-**Option A: Agent only**
-```bash
+# Run the daemon
 python agent/main.py
 ```
 
-**Option B: With API + Dashboard**
-```bash
-# Terminal 1: API Server
-python run_api.py
+## ☁️ Deploy to Render (FREE)
 
-# Terminal 2: Dashboard
-cd dashboard
-npm run dev
+### Option A: One-Click Deploy
 
-# Open http://localhost:3000
-```
+[![Deploy to Render](https://render.com/images/deploy-to-render-button.svg)](https://render.com/deploy)
 
-**Option C: Docker**
-```bash
-docker-compose up -d
-# API: http://localhost:8000
-# Dashboard: http://localhost:3000
-```
-
-## ☁️ Deploy to Vercel
-
-### Deploy Dashboard
+### Option B: Manual Deploy
 
 1. **Push to GitHub**
 ```bash
-git init
 git add .
-git commit -m "Initial commit"
-git remote add origin https://github.com/YOUR_USERNAME/pow-agent.git
-git push -u origin main
+git commit -m "Ready for Render"
+git push origin main
 ```
 
-2. **Deploy to Vercel**
-   - Go to [vercel.com](https://vercel.com)
-   - Import your repository
-   - Set root directory to `dashboard`
-   - Add environment variables:
-     - `NEXT_PUBLIC_API_URL` = Your API URL
-     - `NEXT_PUBLIC_WS_URL` = Your WebSocket URL
+2. **Create Render Account**
+   - Go to [render.com](https://render.com)
+   - Sign up with GitHub
 
-3. **Deploy API Backend**
-   - Deploy to Railway, Render, or any Python hosting
-   - Or use the provided Dockerfile
+3. **Create Background Worker**
+   - Click "New" → "Background Worker"
+   - Connect your repository
+   - Configure:
+     - **Name**: `pow-agent-worker`
+     - **Runtime**: `Python 3`
+     - **Build Command**: `pip install -r requirements.txt`
+     - **Start Command**: `bash start.sh`
+     - **Plan**: `Free`
 
-### Environment Variables for Vercel
+4. **Set Environment Variables**
+   In Render Dashboard → Environment:
+   
+   | Variable | Value |
+   |----------|-------|
+   | `COLOSSEUM_API_KEY` | Your Colosseum API key |
+   | `OPENAI_API_KEY` | Your OpenAI API key |
+   | `AGENTWALLET_SESSION` | Your Solana keypair JSON |
+   | `PROGRAM_ID` | From anchor deploy |
+   | `SOLANA_RPC` | `https://api.devnet.solana.com` |
+   | `LOOP_INTERVAL_SECONDS` | `1800` |
+   | `LOG_LEVEL` | `INFO` |
 
-```env
-NEXT_PUBLIC_API_URL=https://your-api-domain.com
-NEXT_PUBLIC_WS_URL=wss://your-api-domain.com
-```
+5. **Deploy**
+   - Click "Create Background Worker"
+   - Monitor logs in Render dashboard
+
+### Render Blueprint (Auto-Deploy)
+
+The `render.yaml` file enables automatic deployment:
+- Push to main branch triggers auto-deploy
+- Environment variables configured in blueprint
 
 ## 🔧 Configuration
 
@@ -237,91 +216,69 @@ NEXT_PUBLIC_WS_URL=wss://your-api-domain.com
 | Variable | Description | Required | Default |
 |----------|-------------|----------|---------|
 | `COLOSSEUM_API_KEY` | Colosseum hackathon API key | Yes | - |
-| `COLOSSEUM_BASE_URL` | Colosseum API base URL | No | `https://colosseum.com/api` |
+| `COLOSSEUM_BASE_URL` | Colosseum API base URL | No | `https://agents.colosseum.com/api` |
 | `OPENAI_API_KEY` | OpenAI API key | Yes | - |
 | `OPENAI_MODEL` | OpenAI model | No | `gpt-4` |
 | `AGENTWALLET_SESSION` | Solana keypair/session | Yes | - |
 | `SOLANA_RPC` | Solana RPC endpoint | No | `https://api.devnet.solana.com` |
 | `PROGRAM_ID` | Deployed Anchor program ID | Yes | - |
-| `HEARTBEAT_URL` | Heartbeat.md URL | No | `https://colosseum.com/heartbeat.md` |
+| `HEARTBEAT_URL` | Heartbeat.md URL | No | `https://agents.colosseum.com/heartbeat.md` |
 | `LOOP_INTERVAL_SECONDS` | Loop interval | No | `1800` |
 | `LOG_LEVEL` | Logging level | No | `INFO` |
-| `API_HOST` | API server host | No | `0.0.0.0` |
-| `API_PORT` | API server port | No | `8000` |
 
 ### AgentWallet Session
 
 The `AGENTWALLET_SESSION` can be:
-- Base58 encoded 64-byte secret key
-- JSON array of bytes
-- Path to a keypair file (e.g., `~/.config/solana/id.json`)
+- **JSON Array**: `[1,2,3,...,64]` (64 bytes)
+- **Base58**: Encoded 64-byte secret key
+- **File Path**: `~/.config/solana/id.json`
+- **Hex String**: Private key in hex format
 
-## 📡 API Endpoints
-
-### REST API
-
-| Method | Endpoint | Description |
-|--------|----------|-------------|
-| `GET` | `/health` | Health check |
-| `GET` | `/api/status` | Agent status |
-| `GET` | `/api/metrics` | Agent metrics |
-| `GET` | `/api/cycles` | Recent cycles |
-| `GET` | `/api/logs` | Agent logs |
-| `GET` | `/api/tasks` | Task queue |
-| `GET` | `/api/config` | Configuration |
-| `POST` | `/api/start` | Start agent |
-| `POST` | `/api/stop` | Stop agent |
-| `POST` | `/api/trigger-cycle` | Manual cycle |
-| `POST` | `/api/tasks` | Create task |
-| `DELETE` | `/api/tasks/{id}` | Delete task |
-
-### WebSocket
-
-Connect to `/api/ws` for real-time updates:
-- `cycle_complete` - Cycle finished
-- `state_update` - State changed
-- `log` - New log entry
-- `agent_started` - Agent started
-- `agent_stopped` - Agent stopped
+Get your keypair JSON:
+```bash
+cat ~/.config/solana/id.json
+# Copy the entire array including brackets [...]
+```
 
 ## 🏗️ Architecture
 
 ```
 ┌─────────────────────────────────────────────────────────────────┐
-│                      DASHBOARD (Next.js)                        │
-│  ┌──────────┐  ┌──────────┐  ┌──────────┐  ┌──────────┐       │
-│  │ Metrics  │  │   Logs   │  │  Tasks   │  │  Config  │       │
-│  └────┬─────┘  └────┬─────┘  └────┬─────┘  └────┬─────┘       │
-└───────┼─────────────┼─────────────┼─────────────┼──────────────┘
-        │             │             │             │
-        └─────────────┴──────┬──────┴─────────────┘
-                             │
-                    ┌────────┴────────┐
-                    │  FastAPI + WS   │
-                    │   REST API      │
-                    └────────┬────────┘
-                             │
-┌────────────────────────────┴────────────────────────────────────┐
 │                     AGENT LOOP (30 min)                         │
+│                     Runs 24/7 as daemon                         │
 ├─────────────────────────────────────────────────────────────────┤
 │  OBSERVE          │  THINK           │  ACT        │  VERIFY   │
 │  ─────────        │  ─────           │  ───        │  ──────   │
-│  • Heartbeat      │  • Decision      │  • Vote     │  • Hash   │
-│  • Status API     │    Engine        │  • Comment  │  • TX     │
-│  • Forum Posts    │  • AI Analysis   │  • Solve    │  • Log    │
+│  • Heartbeat.md   │  • Decision      │  • Vote     │  • Hash   │
+│  • /agents/status │    Engine        │  • Comment  │  • TX     │
+│  • Forum Posts    │  • OpenAI        │  • Solve    │  • Log    │
 └─────────────────────────────────────────────────────────────────┘
                               │
                               ▼
 ┌─────────────────────────────────────────────────────────────────┐
 │                    SOLANA DEVNET                                │
 │  ┌─────────────────────────────────────────────────────────┐   │
-│  │  POW_BOUNTY PROGRAM                                      │   │
+│  │  POW_BOUNTY PROGRAM (Anchor)                            │   │
+│  │  PDA Seeds: ["bounty", id.to_le_bytes()]                │   │
+│  │                                                          │   │
 │  │  • create_bounty(id, description, reward)               │   │
 │  │  • submit_work(bounty_id, result_hash)                  │   │
 │  │  • approve_and_pay(bounty_id)                           │   │
 │  └─────────────────────────────────────────────────────────┘   │
 └─────────────────────────────────────────────────────────────────┘
 ```
+
+### Agent Cycle Flow
+
+1. **OBSERVE**: Check heartbeat.md and /agents/status
+2. **THINK**: Analyze status, decide next action
+3. **ACT**: 
+   - Engage forum (vote/comment)
+   - Solve task with OpenAI
+   - Submit proof hash to Solana
+4. **VERIFY**: Confirm transaction on-chain
+5. **SLEEP**: Wait 30 minutes
+6. **REPEAT**
 
 ## 📊 Logging
 
@@ -332,18 +289,8 @@ Logs are written to `logs/agent.log` with structured format:
 [2024-01-15T10:30:47Z][INFO][solana] TX submitted: 5xK7...abc
 ```
 
-## 🧪 Testing
-
-```bash
-# Run tests
-pytest
-
-# With coverage
-pytest --cov=agent --cov=colosseum --cov=solana
-
-# Type checking
-mypy agent colosseum solana
-```
+View logs on Render:
+- Dashboard → Your Service → Logs
 
 ## 🐛 Troubleshooting
 
@@ -351,21 +298,43 @@ mypy agent colosseum solana
 
 1. **"PROGRAM_ID is required"**
    - Deploy the Anchor program first: `anchor deploy`
-   - Copy the Program ID to `.env`
+   - Copy the Program ID to your environment variables
 
 2. **"AGENTWALLET_SESSION must be a Solana keypair"**
-   - Use base58 encoded secret key
-   - Or path to keypair file: `~/.config/solana/id.json`
+   - Use JSON array format: `[1,2,3,...,64]`
+   - Or base58 encoded secret key
+   - Or path to keypair file
 
 3. **"Rate limit exceeded"**
-   - The agent has retry logic built in
-   - Reduce `LOOP_INTERVAL_SECONDS` if needed
+   - The agent has retry logic built in (3 retries)
+   - Increase `LOOP_INTERVAL_SECONDS` if needed
 
-4. **WebSocket connection failed**
-   - Check API server is running
-   - Verify `NEXT_PUBLIC_WS_URL` is correct
+4. **Render worker keeps restarting**
+   - Check logs for error messages
+   - Verify all required environment variables are set
+   - Ensure `start.sh` has proper permissions
+
+5. **Solana transaction failing**
+   - Get more devnet SOL: `solana airdrop 2`
+   - Check RPC endpoint is reachable
+   - Verify program is deployed correctly
+
+### Getting Devnet SOL
+
+```bash
+# Primary faucet
+solana airdrop 2
+
+# Alternative faucets (if rate limited):
+# https://faucet.solana.com
+# https://solfaucet.com
+```
 
 ## 📄 License
 
 MIT License - Built for Colosseum Solana Agent Hackathon
+
+---
+
+**Repository**: https://github.com/nayrbryanGaming/proof-of-work-agent
 

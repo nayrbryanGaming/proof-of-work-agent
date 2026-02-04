@@ -100,7 +100,7 @@ class Config:
                 program_id=program_id,
             ),
             agent=AgentConfig(
-                heartbeat_url=_env("HEARTBEAT_URL", "https://colosseum.com/heartbeat.md"),
+                heartbeat_url=_env("HEARTBEAT_URL", "https://agents.colosseum.com/heartbeat.md"),
                 loop_interval=int(_env("LOOP_INTERVAL_SECONDS", "1800")),
                 log_level=_env("LOG_LEVEL", "INFO"),
             ),

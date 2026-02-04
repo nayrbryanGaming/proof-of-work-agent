@@ -15,7 +15,8 @@ import requests
 from agent.config import config
 from agent.logger import get_logger
 
-HEARTBEAT_URL = "https://colosseum.com/heartbeat.md"
+# Default heartbeat URL - can be overridden by config
+HEARTBEAT_URL = "https://agents.colosseum.com/heartbeat.md"
 
 
 @dataclass
