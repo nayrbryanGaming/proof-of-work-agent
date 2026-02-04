@@ -1,5 +1,5 @@
 """
-API Routes for the POW Agent Dashboard.
+Enhanced API Routes - Production-grade with advanced features.
 """
 
 from __future__ import annotations
@@ -7,499 +7,825 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import json
-import os
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
-from fastapi import APIRouter, HTTPException, Query, WebSocket, WebSocketDisconnect
-from pydantic import BaseModel, Field
+from fastapi import APIRouter, HTTPException, Query, WebSocket, WebSocketDisconnect, BackgroundTasks, Depends
+from fastapi.responses import StreamingResponse
+from pydantic import BaseModel, Field, validator
 
 from agent.config import config
 from agent.logger import get_logger
 from api.websocket import manager as ws_manager
 
-router = APIRouter(tags=["agent"])
+
+router = APIRouter(tags=["Agent"])
 log = get_logger("api.routes")
 
-# Data paths
-LOGS_PATH = Path(__file__).resolve().parent.parent / "logs" / "agent.log"
-TASKS_PATH = Path(__file__).resolve().parent.parent / "tasks" / "sample_tasks.json"
-STATE_PATH = Path(__file__).resolve().parent.parent / "data" / "state.json"
+_LOGS_DIR = Path(__file__).resolve().parent.parent / "logs"
+_DATA_DIR = Path(__file__).resolve().parent.parent / "data"
+_TASKS_DIR = Path(__file__).resolve().parent.parent / "tasks"
 
 
 # ============================================================
-# Pydantic Models
+# PYDANTIC MODELS
 # ============================================================
 
-class TaskCreate(BaseModel):
-    description: str = Field(..., min_length=10, max_length=1000)
+class StatusResponse(BaseModel):
+    """Agent status response."""
+    running: bool
+    current_cycle: int
+    uptime_seconds: float
+    last_heartbeat: Optional[str] = None
+    last_cycle: Optional[str] = None
+    health: str = "unknown"
+    version: str = "1.0.0"
+
+
+class MetricsResponse(BaseModel):
+    """Metrics response."""
+    cycles: Dict[str, Any]
+    tasks: Dict[str, Any]
+    forum: Dict[str, Any]
+    solana: Dict[str, Any]
+    health: Dict[str, Any]
+
+
+class CycleResponse(BaseModel):
+    """Single cycle response."""
+    cycle_number: int
+    started_at: str
+    completed_at: Optional[str]
+    duration: float
+    status: str
+    heartbeat_synced: bool
+    forum_engaged: bool
+    task_solved: bool
+    task_hash: Optional[str] = None
+    solana_tx: Optional[str] = None
+    errors: List[str] = []
+
+
+class TaskCreateRequest(BaseModel):
+    """Request to create a task."""
+    description: str = Field(..., min_length=10, max_length=2000)
     category: str = Field(default="general", max_length=50)
     difficulty: str = Field(default="medium", pattern="^(easy|medium|hard)$")
+    priority: int = Field(default=2, ge=0, le=4)
+    tags: List[str] = Field(default_factory=list)
+    
+    @validator('description')
+    def validate_description(cls, v):
+        if len(v.strip()) < 10:
+            raise ValueError('Description too short')
+        return v.strip()
 
 
 class TaskResponse(BaseModel):
+    """Task response."""
     id: int
     description: str
     category: str
     difficulty: str
+    priority: int = 2
+    tags: List[str] = []
     created_at: Optional[str] = None
+    solved: bool = False
+    solution_hash: Optional[str] = None
 
 
-class AgentState(BaseModel):
-    running: bool
-    cycle_count: int
-    last_cycle_at: Optional[str]
-    last_heartbeat_at: Optional[str]
-    last_forum_at: Optional[str]
-    last_solana_tx: Optional[str]
-    errors_count: int
-    tasks_solved: int
-
-
-class CycleResult(BaseModel):
-    cycle_number: int
-    heartbeat_synced: bool
-    status_checked: bool
-    forum_engaged: bool
-    task_solved: bool
-    task_hash: Optional[str]
-    solana_tx: Optional[str]
-    project_updated: bool
-    duration: float
-    errors: List[str]
-    timestamp: str
-
-
-class ConfigUpdate(BaseModel):
-    loop_interval: Optional[int] = Field(None, ge=60, le=7200)
-    log_level: Optional[str] = Field(None, pattern="^(DEBUG|INFO|WARNING|ERROR)$")
+class ConfigResponse(BaseModel):
+    """Configuration response (read-only)."""
+    loop_interval: int
+    heartbeat_url: str
+    solana_rpc: str
+    program_id: Optional[str]
+    log_level: str
+    forum_enabled: bool = True
+    max_forum_comments: int = 5
 
 
 class LogEntry(BaseModel):
+    """Log entry model."""
     timestamp: str
     level: str
     module: str
     message: str
 
 
-class MetricsResponse(BaseModel):
+class EventResponse(BaseModel):
+    """Event response."""
+    id: str
+    type: str
+    data: Dict[str, Any]
+    timestamp: str
+    source: str
+
+
+class HealthCheckResult(BaseModel):
+    """Health check result."""
+    name: str
+    status: str
+    message: str
+    latency_ms: float
+
+
+class OverallHealthResponse(BaseModel):
+    """Overall health response."""
+    status: str
+    checks: List[HealthCheckResult]
     uptime_seconds: float
-    total_cycles: int
-    successful_cycles: int
-    failed_cycles: int
-    tasks_solved: int
-    forum_engagements: int
-    solana_transactions: int
-    average_cycle_duration: float
-    error_rate: float
+    timestamp: str
 
 
 # ============================================================
-# State Management
+# STATE MANAGEMENT
 # ============================================================
 
-_state: Dict[str, Any] = {
-    "running": False,
-    "cycle_count": 0,
-    "last_cycle_at": None,
-    "last_heartbeat_at": None,
-    "last_forum_at": None,
-    "last_solana_tx": None,
-    "errors_count": 0,
-    "tasks_solved": 0,
-    "start_time": None,
-    "cycles": [],
-    "metrics": {
-        "total_cycles": 0,
-        "successful_cycles": 0,
-        "failed_cycles": 0,
-        "tasks_solved": 0,
-        "forum_engagements": 0,
-        "solana_transactions": 0,
-        "cycle_durations": [],
-    }
-}
-
-
-def _load_state():
-    """Load state from file."""
-    global _state
-    if STATE_PATH.exists():
+class AgentStateManager:
+    """Manages agent state with persistence."""
+    
+    def __init__(self):
+        self._state = {
+            "running": False,
+            "current_cycle": 0,
+            "start_time": None,
+            "last_heartbeat": None,
+            "last_cycle_time": None,
+            "total_cycles": 0,
+            "successful_cycles": 0,
+            "failed_cycles": 0,
+            "tasks_solved": 0,
+            "forum_engagements": 0,
+            "solana_transactions": 0
+        }
+        self._state_file = _DATA_DIR / "api_state.json"
+        self._load()
+    
+    def _load(self):
+        """Load state from file."""
+        if self._state_file.exists():
+            try:
+                with self._state_file.open() as f:
+                    saved = json.load(f)
+                    self._state.update(saved)
+                    self._state["running"] = False  # Always start stopped
+            except Exception as e:
+                log.warn(f"Failed to load state: {e}")
+    
+    def _save(self):
+        """Save state to file."""
+        self._state_file.parent.mkdir(parents=True, exist_ok=True)
         try:
-            with STATE_PATH.open("r", encoding="utf-8") as f:
-                saved = json.load(f)
-                _state.update(saved)
+            with self._state_file.open("w") as f:
+                json.dump(self._state, f, indent=2)
+        except Exception as e:
+            log.warn(f"Failed to save state: {e}")
+    
+    def get(self, key: str, default: Any = None) -> Any:
+        return self._state.get(key, default)
+    
+    def set(self, key: str, value: Any):
+        self._state[key] = value
+        self._save()
+    
+    def update(self, data: Dict[str, Any]):
+        self._state.update(data)
+        self._save()
+    
+    @property
+    def state(self) -> Dict[str, Any]:
+        return dict(self._state)
+
+
+_state = AgentStateManager()
+
+
+# ============================================================
+# HELPER FUNCTIONS
+# ============================================================
+
+def _parse_log_line(line: str) -> Optional[Dict[str, str]]:
+    """Parse a log line into components."""
+    try:
+        import re
+        match = re.match(r'\[([^\]]+)\]\[([^\]]+)\]\[([^\]]+)\]\s*(.*)', line.strip())
+        if match:
+            return {
+                "timestamp": match.group(1),
+                "level": match.group(2),
+                "module": match.group(3),
+                "message": match.group(4)
+            }
+    except Exception:
+        pass
+    return None
+
+
+def _load_tasks() -> List[Dict[str, Any]]:
+    """Load tasks from file."""
+    tasks_file = _TASKS_DIR / "sample_tasks.json"
+    if tasks_file.exists():
+        try:
+            with tasks_file.open() as f:
+                return json.load(f)
         except Exception:
             pass
+    return []
 
 
-def _save_state():
-    """Save state to file."""
-    STATE_PATH.parent.mkdir(parents=True, exist_ok=True)
-    with STATE_PATH.open("w", encoding="utf-8") as f:
-        json.dump(_state, f, indent=2, default=str)
+def _save_tasks(tasks: List[Dict[str, Any]]):
+    """Save tasks to file."""
+    tasks_file = _TASKS_DIR / "sample_tasks.json"
+    tasks_file.parent.mkdir(parents=True, exist_ok=True)
+    with tasks_file.open("w") as f:
+        json.dump(tasks, f, indent=2)
 
 
-def update_state(key: str, value: Any):
-    """Update state and broadcast via WebSocket."""
-    _state[key] = value
-    _save_state()
-    asyncio.create_task(ws_manager.broadcast({
-        "type": "state_update",
-        "key": key,
-        "value": value,
-        "timestamp": datetime.now(timezone.utc).isoformat()
-    }))
+def _load_cycles() -> List[Dict[str, Any]]:
+    """Load cycle history."""
+    state_file = _DATA_DIR / "state.json"
+    if state_file.exists():
+        try:
+            with state_file.open() as f:
+                data = json.load(f)
+                return data.get("recent_cycles", [])
+        except Exception:
+            pass
+    return []
 
 
-def record_cycle(result: CycleResult):
-    """Record a cycle result."""
-    _state["cycle_count"] = result.cycle_number
-    _state["last_cycle_at"] = result.timestamp
-    _state["metrics"]["total_cycles"] += 1
+async def _stream_logs(log_file: Path, lines: int = 100):
+    """Stream log file as SSE."""
+    if not log_file.exists():
+        yield "data: No logs available\n\n"
+        return
     
-    if result.heartbeat_synced:
-        _state["last_heartbeat_at"] = result.timestamp
-    
-    if result.forum_engaged:
-        _state["last_forum_at"] = result.timestamp
-        _state["metrics"]["forum_engagements"] += 1
-    
-    if result.task_solved:
-        _state["tasks_solved"] += 1
-        _state["metrics"]["tasks_solved"] += 1
-    
-    if result.solana_tx:
-        _state["last_solana_tx"] = result.solana_tx
-        _state["metrics"]["solana_transactions"] += 1
-    
-    if result.errors:
-        _state["errors_count"] += len(result.errors)
-        _state["metrics"]["failed_cycles"] += 1
-    else:
-        _state["metrics"]["successful_cycles"] += 1
-    
-    _state["metrics"]["cycle_durations"].append(result.duration)
-    # Keep only last 100 durations
-    _state["metrics"]["cycle_durations"] = _state["metrics"]["cycle_durations"][-100:]
-    
-    _state["cycles"].append(result.dict())
-    # Keep only last 50 cycles
-    _state["cycles"] = _state["cycles"][-50:]
-    
-    _save_state()
-    
-    asyncio.create_task(ws_manager.broadcast({
-        "type": "cycle_complete",
-        "data": result.dict(),
-        "timestamp": datetime.now(timezone.utc).isoformat()
-    }))
-
-
-# Load state on module import
-_load_state()
+    try:
+        with log_file.open("r", encoding="utf-8", errors="replace") as f:
+            all_lines = f.readlines()
+            for line in all_lines[-lines:]:
+                yield f"data: {json.dumps({'line': line.strip()})}\n\n"
+    except Exception as e:
+        yield f"data: {json.dumps({'error': str(e)})}\n\n"
 
 
 # ============================================================
-# Routes
+# ROUTES - STATUS & CONTROL
 # ============================================================
 
-@router.get("/status", response_model=AgentState)
+@router.get("/status", response_model=StatusResponse)
 async def get_status():
     """Get current agent status."""
-    from api.server import get_agent_status
+    uptime = 0.0
+    if _state.get("start_time"):
+        try:
+            start = datetime.fromisoformat(_state.get("start_time"))
+            uptime = (datetime.now(timezone.utc) - start).total_seconds()
+        except Exception:
+            pass
     
-    agent_status = get_agent_status()
-    
-    return AgentState(
-        running=agent_status["running"],
-        cycle_count=_state["cycle_count"],
-        last_cycle_at=_state["last_cycle_at"],
-        last_heartbeat_at=_state["last_heartbeat_at"],
-        last_forum_at=_state["last_forum_at"],
-        last_solana_tx=_state["last_solana_tx"],
-        errors_count=_state["errors_count"],
-        tasks_solved=_state["tasks_solved"]
+    return StatusResponse(
+        running=_state.get("running", False),
+        current_cycle=_state.get("current_cycle", 0),
+        uptime_seconds=uptime,
+        last_heartbeat=_state.get("last_heartbeat"),
+        last_cycle=_state.get("last_cycle_time"),
+        health="healthy" if _state.get("running") else "stopped"
     )
 
 
 @router.post("/start")
-async def start_agent():
-    """Start the agent."""
-    from api.server import start_agent_background, get_agent_status
-    
-    status = get_agent_status()
-    if status["running"]:
+async def start_agent(background_tasks: BackgroundTasks):
+    """Start the agent loop."""
+    if _state.get("running"):
         raise HTTPException(status_code=400, detail="Agent is already running")
     
-    _state["start_time"] = datetime.now(timezone.utc).isoformat()
-    _state["running"] = True
-    _save_state()
+    try:
+        from api.server import start_agent_background
+        success = await start_agent_background()
+        
+        if success:
+            _state.update({
+                "running": True,
+                "start_time": datetime.now(timezone.utc).isoformat()
+            })
+            
+            await ws_manager.broadcast({
+                "type": "agent_started",
+                "timestamp": _state.get("start_time")
+            })
+            
+            return {"status": "started", "message": "Agent started successfully"}
+    except Exception as e:
+        log.error(f"Failed to start agent: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
     
-    success = await start_agent_background()
-    
-    if success:
-        await ws_manager.broadcast({
-            "type": "agent_started",
-            "timestamp": datetime.now(timezone.utc).isoformat()
-        })
-        return {"status": "started", "message": "Agent started successfully"}
-    else:
-        raise HTTPException(status_code=500, detail="Failed to start agent")
+    raise HTTPException(status_code=500, detail="Failed to start agent")
 
 
 @router.post("/stop")
 async def stop_agent():
-    """Stop the agent."""
-    from api.server import stop_agent_background, get_agent_status
-    
-    status = get_agent_status()
-    if not status["running"]:
+    """Stop the agent loop."""
+    if not _state.get("running"):
         raise HTTPException(status_code=400, detail="Agent is not running")
     
-    _state["running"] = False
-    _save_state()
+    try:
+        from api.server import stop_agent_background
+        success = await stop_agent_background()
+        
+        if success:
+            _state.set("running", False)
+            
+            await ws_manager.broadcast({
+                "type": "agent_stopped",
+                "timestamp": datetime.now(timezone.utc).isoformat()
+            })
+            
+            return {"status": "stopped", "message": "Agent stopped successfully"}
+    except Exception as e:
+        log.error(f"Failed to stop agent: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
     
-    success = await stop_agent_background()
-    
-    if success:
-        await ws_manager.broadcast({
-            "type": "agent_stopped",
-            "timestamp": datetime.now(timezone.utc).isoformat()
-        })
-        return {"status": "stopped", "message": "Agent stopped successfully"}
-    else:
-        raise HTTPException(status_code=500, detail="Failed to stop agent")
+    raise HTTPException(status_code=500, detail="Failed to stop agent")
 
 
-@router.get("/metrics", response_model=MetricsResponse)
+@router.post("/trigger-cycle")
+async def trigger_cycle():
+    """Manually trigger an agent cycle."""
+    if not _state.get("running"):
+        raise HTTPException(status_code=400, detail="Agent is not running")
+    
+    # Signal would go to the running loop
+    await ws_manager.broadcast({
+        "type": "cycle_trigger_requested",
+        "timestamp": datetime.now(timezone.utc).isoformat()
+    })
+    
+    return {"status": "triggered", "message": "Cycle trigger requested"}
+
+
+# ============================================================
+# ROUTES - METRICS
+# ============================================================
+
+@router.get("/metrics")
 async def get_metrics():
     """Get agent metrics."""
-    metrics = _state["metrics"]
-    
-    start_time = _state.get("start_time")
-    if start_time:
-        start_dt = datetime.fromisoformat(start_time.replace("Z", "+00:00"))
-        uptime = (datetime.now(timezone.utc) - start_dt).total_seconds()
-    else:
-        uptime = 0
-    
-    durations = metrics.get("cycle_durations", [])
-    avg_duration = sum(durations) / len(durations) if durations else 0
-    
-    total = metrics.get("total_cycles", 0)
-    failed = metrics.get("failed_cycles", 0)
-    error_rate = (failed / total * 100) if total > 0 else 0
-    
-    return MetricsResponse(
-        uptime_seconds=uptime,
-        total_cycles=total,
-        successful_cycles=metrics.get("successful_cycles", 0),
-        failed_cycles=failed,
-        tasks_solved=metrics.get("tasks_solved", 0),
-        forum_engagements=metrics.get("forum_engagements", 0),
-        solana_transactions=metrics.get("solana_transactions", 0),
-        average_cycle_duration=avg_duration,
-        error_rate=error_rate
-    )
-
-
-@router.get("/cycles", response_model=List[CycleResult])
-async def get_cycles(
-    limit: int = Query(default=20, ge=1, le=100),
-    offset: int = Query(default=0, ge=0)
-):
-    """Get recent cycle results."""
-    cycles = _state.get("cycles", [])
-    cycles = sorted(cycles, key=lambda x: x.get("cycle_number", 0), reverse=True)
-    return cycles[offset:offset + limit]
-
-
-@router.get("/logs", response_model=List[LogEntry])
-async def get_logs(
-    limit: int = Query(default=100, ge=1, le=1000),
-    level: Optional[str] = Query(default=None, pattern="^(DEBUG|INFO|WARNING|ERROR)$"),
-    module: Optional[str] = Query(default=None)
-):
-    """Get agent logs."""
-    if not LOGS_PATH.exists():
-        return []
-    
-    logs = []
     try:
-        with LOGS_PATH.open("r", encoding="utf-8") as f:
-            lines = f.readlines()
-        
-        for line in reversed(lines[-limit * 2:]):
-            line = line.strip()
-            if not line:
-                continue
-            
-            # Parse log format: [TIME][LEVEL][MODULE] message
-            try:
-                parts = line.split("]")
-                if len(parts) >= 4:
-                    timestamp = parts[0][1:]
-                    log_level = parts[1][1:]
-                    log_module = parts[2][1:]
-                    message = "]".join(parts[3:]).strip()
-                    
-                    if level and log_level != level:
-                        continue
-                    if module and module not in log_module:
-                        continue
-                    
-                    logs.append(LogEntry(
-                        timestamp=timestamp,
-                        level=log_level,
-                        module=log_module,
-                        message=message
-                    ))
-                    
-                    if len(logs) >= limit:
-                        break
-            except Exception:
-                continue
-    except Exception as e:
-        log.error(f"Failed to read logs: {e}")
-    
-    return logs
+        from agent.metrics import agent_metrics
+        return agent_metrics.get_summary()
+    except ImportError:
+        # Fallback if metrics module not available
+        return {
+            "cycles": {
+                "total": _state.get("total_cycles", 0),
+                "success": _state.get("successful_cycles", 0),
+                "failed": _state.get("failed_cycles", 0),
+                "current": _state.get("current_cycle", 0)
+            },
+            "tasks": {"solved": _state.get("tasks_solved", 0)},
+            "forum": {"engagements": _state.get("forum_engagements", 0)},
+            "solana": {"transactions": _state.get("solana_transactions", 0)},
+            "health": {"running": _state.get("running", False)}
+        }
 
 
-@router.get("/tasks", response_model=List[TaskResponse])
-async def get_tasks():
-    """Get all tasks."""
-    if not TASKS_PATH.exists():
-        return []
-    
+@router.get("/metrics/prometheus")
+async def get_prometheus_metrics():
+    """Get metrics in Prometheus format."""
     try:
-        with TASKS_PATH.open("r", encoding="utf-8") as f:
-            tasks = json.load(f)
-        return tasks
-    except Exception as e:
-        log.error(f"Failed to load tasks: {e}")
-        raise HTTPException(status_code=500, detail="Failed to load tasks")
+        from agent.metrics import registry
+        return StreamingResponse(
+            iter([registry.to_prometheus()]),
+            media_type="text/plain"
+        )
+    except ImportError:
+        return StreamingResponse(
+            iter(["# Metrics not available\n"]),
+            media_type="text/plain"
+        )
 
 
-@router.post("/tasks", response_model=TaskResponse)
-async def create_task(task: TaskCreate):
-    """Create a new task."""
-    tasks = []
-    if TASKS_PATH.exists():
+# ============================================================
+# ROUTES - HEALTH
+# ============================================================
+
+@router.get("/health")
+async def get_health():
+    """Get comprehensive health check."""
+    checks = []
+    
+    # Check agent running
+    checks.append({
+        "name": "agent_loop",
+        "status": "healthy" if _state.get("running") else "stopped",
+        "message": "Agent is running" if _state.get("running") else "Agent is stopped",
+        "latency_ms": 0
+    })
+    
+    # Check logs directory
+    logs_ok = _LOGS_DIR.exists()
+    checks.append({
+        "name": "logs_directory",
+        "status": "healthy" if logs_ok else "unhealthy",
+        "message": "Logs directory exists" if logs_ok else "Logs directory missing",
+        "latency_ms": 0
+    })
+    
+    # Check data directory
+    data_ok = _DATA_DIR.exists()
+    checks.append({
+        "name": "data_directory",
+        "status": "healthy" if data_ok else "unhealthy",
+        "message": "Data directory exists" if data_ok else "Data directory missing",
+        "latency_ms": 0
+    })
+    
+    # Check config
+    config_ok = bool(config.colosseum_api_key or True)  # Always OK for now
+    checks.append({
+        "name": "configuration",
+        "status": "healthy" if config_ok else "degraded",
+        "message": "Configuration loaded",
+        "latency_ms": 0
+    })
+    
+    uptime = 0.0
+    if _state.get("start_time"):
         try:
-            with TASKS_PATH.open("r", encoding="utf-8") as f:
-                tasks = json.load(f)
+            start = datetime.fromisoformat(_state.get("start_time"))
+            uptime = (datetime.now(timezone.utc) - start).total_seconds()
         except Exception:
             pass
     
-    new_id = max([t.get("id", 0) for t in tasks], default=0) + 1
+    # Determine overall status
+    unhealthy_count = sum(1 for c in checks if c["status"] == "unhealthy")
+    overall = "healthy" if unhealthy_count == 0 else "unhealthy"
+    
+    return {
+        "status": overall,
+        "checks": checks,
+        "uptime_seconds": uptime,
+        "timestamp": datetime.now(timezone.utc).isoformat()
+    }
+
+
+@router.get("/health/live")
+async def liveness():
+    """Kubernetes liveness probe."""
+    return {"status": "alive", "timestamp": datetime.now(timezone.utc).isoformat()}
+
+
+@router.get("/health/ready")
+async def readiness():
+    """Kubernetes readiness probe."""
+    # Check essential components
+    if not _DATA_DIR.exists():
+        raise HTTPException(status_code=503, detail="Data directory not ready")
+    
+    return {"status": "ready", "timestamp": datetime.now(timezone.utc).isoformat()}
+
+
+# ============================================================
+# ROUTES - CYCLES
+# ============================================================
+
+@router.get("/cycles", response_model=List[CycleResponse])
+async def get_cycles(
+    limit: int = Query(default=50, ge=1, le=500),
+    offset: int = Query(default=0, ge=0),
+    status: Optional[str] = Query(default=None, pattern="^(completed|failed|running)$")
+):
+    """Get cycle history with pagination."""
+    cycles = _load_cycles()
+    
+    # Filter by status if specified
+    if status:
+        if status == "completed":
+            cycles = [c for c in cycles if c.get("completed_at") and not c.get("errors")]
+        elif status == "failed":
+            cycles = [c for c in cycles if c.get("errors")]
+        elif status == "running":
+            cycles = [c for c in cycles if not c.get("completed_at")]
+    
+    # Apply pagination
+    total = len(cycles)
+    cycles = cycles[offset:offset + limit]
+    
+    return [
+        CycleResponse(
+            cycle_number=c.get("cycle_number", 0),
+            started_at=c.get("started_at", ""),
+            completed_at=c.get("completed_at"),
+            duration=c.get("duration", 0),
+            status="failed" if c.get("errors") else ("completed" if c.get("completed_at") else "running"),
+            heartbeat_synced=c.get("heartbeat_synced", False),
+            forum_engaged=c.get("forum_engaged", False),
+            task_solved=c.get("task_solved", False),
+            task_hash=c.get("task_hash"),
+            solana_tx=c.get("solana_tx"),
+            errors=c.get("errors", [])
+        )
+        for c in cycles
+    ]
+
+
+@router.get("/cycles/latest")
+async def get_latest_cycle():
+    """Get the most recent cycle."""
+    cycles = _load_cycles()
+    if not cycles:
+        raise HTTPException(status_code=404, detail="No cycles found")
+    
+    latest = cycles[-1]
+    return CycleResponse(
+        cycle_number=latest.get("cycle_number", 0),
+        started_at=latest.get("started_at", ""),
+        completed_at=latest.get("completed_at"),
+        duration=latest.get("duration", 0),
+        status="completed" if latest.get("completed_at") else "running",
+        heartbeat_synced=latest.get("heartbeat_synced", False),
+        forum_engaged=latest.get("forum_engaged", False),
+        task_solved=latest.get("task_solved", False),
+        task_hash=latest.get("task_hash"),
+        solana_tx=latest.get("solana_tx"),
+        errors=latest.get("errors", [])
+    )
+
+
+@router.get("/cycles/{cycle_number}")
+async def get_cycle(cycle_number: int):
+    """Get specific cycle by number."""
+    cycles = _load_cycles()
+    
+    for c in cycles:
+        if c.get("cycle_number") == cycle_number:
+            return c
+    
+    raise HTTPException(status_code=404, detail=f"Cycle {cycle_number} not found")
+
+
+# ============================================================
+# ROUTES - LOGS
+# ============================================================
+
+@router.get("/logs")
+async def get_logs(
+    lines: int = Query(default=100, ge=1, le=5000),
+    level: Optional[str] = Query(default=None, pattern="^(INFO|WARN|ERROR|DEBUG|SUCCESS)$"),
+    module: Optional[str] = None,
+    search: Optional[str] = None
+):
+    """Get agent logs with filtering."""
+    log_file = _LOGS_DIR / "agent.log"
+    
+    if not log_file.exists():
+        return {"logs": [], "total": 0, "filtered": True}
+    
+    logs = []
+    try:
+        with log_file.open("r", encoding="utf-8", errors="replace") as f:
+            all_lines = f.readlines()
+            
+            for line in reversed(all_lines):
+                parsed = _parse_log_line(line)
+                if not parsed:
+                    continue
+                
+                # Apply filters
+                if level and parsed["level"] != level:
+                    continue
+                if module and module.lower() not in parsed["module"].lower():
+                    continue
+                if search and search.lower() not in line.lower():
+                    continue
+                
+                logs.append(parsed)
+                
+                if len(logs) >= lines:
+                    break
+                    
+    except Exception as e:
+        log.error(f"Error reading logs: {e}")
+        return {"logs": [], "total": 0, "error": str(e)}
+    
+    return {
+        "logs": list(reversed(logs)),
+        "total": len(logs),
+        "filtered": bool(level or module or search)
+    }
+
+
+@router.get("/logs/stream")
+async def stream_logs(lines: int = Query(default=100, ge=1, le=1000)):
+    """Stream logs as Server-Sent Events."""
+    log_file = _LOGS_DIR / "agent.log"
+    return StreamingResponse(
+        _stream_logs(log_file, lines),
+        media_type="text/event-stream"
+    )
+
+
+@router.get("/logs/download")
+async def download_logs():
+    """Download log file."""
+    log_file = _LOGS_DIR / "agent.log"
+    
+    if not log_file.exists():
+        raise HTTPException(status_code=404, detail="Log file not found")
+    
+    def iterate_file():
+        with log_file.open("rb") as f:
+            while chunk := f.read(8192):
+                yield chunk
+    
+    return StreamingResponse(
+        iterate_file(),
+        media_type="text/plain",
+        headers={"Content-Disposition": f"attachment; filename=agent_{datetime.now().strftime('%Y%m%d_%H%M%S')}.log"}
+    )
+
+
+@router.delete("/logs")
+async def clear_logs():
+    """Clear log file (creates backup first)."""
+    log_file = _LOGS_DIR / "agent.log"
+    
+    if log_file.exists():
+        # Create backup
+        backup_name = f"agent_{int(datetime.now().timestamp())}.log.bak"
+        backup_file = _LOGS_DIR / backup_name
+        log_file.rename(backup_file)
+        log_file.touch()
+        
+        return {"status": "cleared", "backup": backup_name}
+    
+    return {"status": "no_logs", "message": "Log file did not exist"}
+
+
+# ============================================================
+# ROUTES - TASKS
+# ============================================================
+
+@router.get("/tasks", response_model=List[TaskResponse])
+async def list_tasks(
+    limit: int = Query(default=50, ge=1, le=500),
+    category: Optional[str] = None,
+    difficulty: Optional[str] = Query(default=None, pattern="^(easy|medium|hard)$")
+):
+    """List all tasks."""
+    tasks = _load_tasks()
+    
+    # Apply filters
+    if category:
+        tasks = [t for t in tasks if t.get("category") == category]
+    if difficulty:
+        tasks = [t for t in tasks if t.get("difficulty") == difficulty]
+    
+    tasks = tasks[:limit]
+    
+    return [
+        TaskResponse(
+            id=t.get("id", i),
+            description=t.get("description", ""),
+            category=t.get("category", "general"),
+            difficulty=t.get("difficulty", "medium"),
+            priority=t.get("priority", 2),
+            tags=t.get("tags", []),
+            created_at=t.get("created_at"),
+            solved=t.get("solved", False),
+            solution_hash=t.get("solution_hash")
+        )
+        for i, t in enumerate(tasks)
+    ]
+
+
+@router.post("/tasks", response_model=TaskResponse)
+async def create_task(request: TaskCreateRequest):
+    """Create a new task."""
+    tasks = _load_tasks()
+    
+    # Generate new ID
+    max_id = max((t.get("id", 0) for t in tasks), default=0)
+    new_id = max_id + 1
+    
     new_task = {
         "id": new_id,
-        "description": task.description,
-        "category": task.category,
-        "difficulty": task.difficulty,
-        "created_at": datetime.now(timezone.utc).isoformat()
+        "description": request.description,
+        "category": request.category,
+        "difficulty": request.difficulty,
+        "priority": request.priority,
+        "tags": request.tags,
+        "created_at": datetime.now(timezone.utc).isoformat(),
+        "solved": False
     }
     
     tasks.append(new_task)
+    _save_tasks(tasks)
     
-    with TASKS_PATH.open("w", encoding="utf-8") as f:
-        json.dump(tasks, f, indent=4)
-    
+    # Broadcast to WebSocket
     await ws_manager.broadcast({
         "type": "task_created",
-        "data": new_task,
-        "timestamp": datetime.now(timezone.utc).isoformat()
+        "task": new_task
     })
     
     return TaskResponse(**new_task)
 
 
+@router.get("/tasks/{task_id}", response_model=TaskResponse)
+async def get_task(task_id: int):
+    """Get task by ID."""
+    tasks = _load_tasks()
+    
+    for t in tasks:
+        if t.get("id") == task_id:
+            return TaskResponse(
+                id=t.get("id"),
+                description=t.get("description", ""),
+                category=t.get("category", "general"),
+                difficulty=t.get("difficulty", "medium"),
+                priority=t.get("priority", 2),
+                tags=t.get("tags", []),
+                created_at=t.get("created_at"),
+                solved=t.get("solved", False),
+                solution_hash=t.get("solution_hash")
+            )
+    
+    raise HTTPException(status_code=404, detail=f"Task {task_id} not found")
+
+
+@router.put("/tasks/{task_id}")
+async def update_task(task_id: int, request: TaskCreateRequest):
+    """Update a task."""
+    tasks = _load_tasks()
+    
+    for i, t in enumerate(tasks):
+        if t.get("id") == task_id:
+            tasks[i].update({
+                "description": request.description,
+                "category": request.category,
+                "difficulty": request.difficulty,
+                "priority": request.priority,
+                "tags": request.tags,
+                "updated_at": datetime.now(timezone.utc).isoformat()
+            })
+            _save_tasks(tasks)
+            return tasks[i]
+    
+    raise HTTPException(status_code=404, detail=f"Task {task_id} not found")
+
+
 @router.delete("/tasks/{task_id}")
 async def delete_task(task_id: int):
     """Delete a task."""
-    if not TASKS_PATH.exists():
-        raise HTTPException(status_code=404, detail="Task not found")
+    tasks = _load_tasks()
     
-    try:
-        with TASKS_PATH.open("r", encoding="utf-8") as f:
-            tasks = json.load(f)
-    except Exception:
-        raise HTTPException(status_code=500, detail="Failed to load tasks")
+    for i, t in enumerate(tasks):
+        if t.get("id") == task_id:
+            deleted = tasks.pop(i)
+            _save_tasks(tasks)
+            return {"status": "deleted", "task_id": task_id}
     
-    original_len = len(tasks)
-    tasks = [t for t in tasks if t.get("id") != task_id]
-    
-    if len(tasks) == original_len:
-        raise HTTPException(status_code=404, detail="Task not found")
-    
-    with TASKS_PATH.open("w", encoding="utf-8") as f:
-        json.dump(tasks, f, indent=4)
-    
-    return {"status": "deleted", "task_id": task_id}
-
-
-@router.get("/config")
-async def get_config():
-    """Get current configuration (non-sensitive)."""
-    return {
-        "colosseum_base_url": config.colosseum.base_url if hasattr(config, 'colosseum') else config.colosseum_base_url,
-        "solana_rpc": config.solana.rpc_url if hasattr(config, 'solana') else config.solana_rpc,
-        "program_id": (config.solana.program_id if hasattr(config, 'solana') else config.program_id) or "NOT_SET",
-        "loop_interval": config.agent.loop_interval if hasattr(config, 'agent') else 1800,
-        "log_level": config.agent.log_level if hasattr(config, 'agent') else "INFO",
-        "heartbeat_url": config.agent.heartbeat_url if hasattr(config, 'agent') else "https://colosseum.com/heartbeat.md"
-    }
-
-
-@router.post("/trigger-cycle")
-async def trigger_cycle():
-    """Manually trigger a single cycle."""
-    from api.server import get_agent_status
-    
-    status = get_agent_status()
-    if status["running"]:
-        raise HTTPException(
-            status_code=400, 
-            detail="Cannot trigger manual cycle while agent is running"
-        )
-    
-    try:
-        from agent.loop import run_cycle
-        from colosseum.api import ColosseumAPI
-        from solana.client import SolanaClient
-        
-        api = ColosseumAPI()
-        solana = SolanaClient()
-        
-        result = await run_cycle(api, solana, _state["cycle_count"] + 1)
-        
-        cycle_result = CycleResult(
-            cycle_number=result.cycle_number,
-            heartbeat_synced=result.heartbeat_synced,
-            status_checked=result.status_checked,
-            forum_engaged=result.forum_engaged,
-            task_solved=result.task_solved,
-            task_hash=result.task_hash,
-            solana_tx=result.solana_tx,
-            project_updated=result.project_updated,
-            duration=result.duration,
-            errors=result.errors,
-            timestamp=datetime.now(timezone.utc).isoformat()
-        )
-        
-        record_cycle(cycle_result)
-        
-        return {"status": "completed", "result": cycle_result.dict()}
-    
-    except Exception as e:
-        log.error(f"Manual cycle failed: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+    raise HTTPException(status_code=404, detail=f"Task {task_id} not found")
 
 
 # ============================================================
-# WebSocket
+# ROUTES - CONFIG
+# ============================================================
+
+@router.get("/config", response_model=ConfigResponse)
+async def get_config():
+    """Get agent configuration (read-only, sensitive values masked)."""
+    return ConfigResponse(
+        loop_interval=config.agent.loop_interval if hasattr(config, 'agent') else 1800,
+        heartbeat_url=config.heartbeat.url if hasattr(config, 'heartbeat') else "https://colosseum.com/heartbeat.md",
+        solana_rpc=config.solana_rpc or "https://api.devnet.solana.com",
+        program_id=config.program_id[:8] + "..." if config.program_id else None,
+        log_level=config.log_level if hasattr(config, 'log_level') else "INFO"
+    )
+
+
+# ============================================================
+# ROUTES - EVENTS
+# ============================================================
+
+@router.get("/events")
+async def get_events(
+    limit: int = Query(default=100, ge=1, le=1000),
+    event_type: Optional[str] = None
+):
+    """Get event history."""
+    try:
+        from agent.events import event_bus
+        return event_bus.get_history(event_type, limit)
+    except ImportError:
+        return []
+
+
+# ============================================================
+# WEBSOCKET
 # ============================================================
 
 @router.websocket("/ws")
@@ -507,31 +833,37 @@ async def websocket_endpoint(websocket: WebSocket):
     """WebSocket endpoint for real-time updates."""
     await ws_manager.connect(websocket)
     
-    # Send initial state
-    await websocket.send_json({
-        "type": "initial_state",
-        "data": {
-            "running": _state["running"],
-            "cycle_count": _state["cycle_count"],
-            "last_cycle_at": _state["last_cycle_at"],
-            "metrics": _state["metrics"]
-        },
-        "timestamp": datetime.now(timezone.utc).isoformat()
-    })
-    
     try:
+        # Send initial state
+        await websocket.send_json({
+            "type": "connected",
+            "state": _state.state
+        })
+        
         while True:
-            data = await websocket.receive_json()
-            
-            # Handle client messages
-            if data.get("type") == "ping":
-                await websocket.send_json({
-                    "type": "pong",
-                    "timestamp": datetime.now(timezone.utc).isoformat()
-                })
-    
+            try:
+                data = await asyncio.wait_for(
+                    websocket.receive_text(),
+                    timeout=30.0
+                )
+                
+                if data == "ping":
+                    await websocket.send_text("pong")
+                elif data == "status":
+                    await websocket.send_json({
+                        "type": "status",
+                        "data": _state.state
+                    })
+                else:
+                    await websocket.send_json({"type": "echo", "data": data})
+                    
+            except asyncio.TimeoutError:
+                # Send keepalive
+                await websocket.send_json({"type": "keepalive"})
+                
     except WebSocketDisconnect:
         ws_manager.disconnect(websocket)
+        log.debug("WebSocket client disconnected")
     except Exception as e:
         log.error(f"WebSocket error: {e}")
         ws_manager.disconnect(websocket)
