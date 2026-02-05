@@ -117,6 +117,68 @@ from .rate_limiter import (
 from .watchdog import Watchdog, get_watchdog, RecoveryAction
 from .shutdown import GracefulShutdown, get_shutdown_handler
 
+# New advanced modules (v2.1)
+from .crypto import (
+    Ed25519,
+    Base58,
+    SolanaKeypair,
+    ProofSigner,
+    SignedProof,
+    ProofHashchain,
+    get_signer,
+    sign_result,
+    get_wallet_address,
+)
+from .backup import (
+    BackupManager,
+    RecoveryManager,
+    StateSnapshot,
+    BackupManifest,
+    BackupType,
+    get_backup_manager,
+    get_state_snapshot,
+    quick_backup,
+    quick_snapshot,
+)
+from .errors import (
+    AgentError,
+    ErrorCode,
+    ErrorCategory,
+    ErrorSeverity,
+    ErrorContext,
+    ErrorRegistry,
+    NetworkError,
+    APIError,
+    RateLimitError,
+    AuthenticationError,
+    ValidationError as AgentValidationError,
+    StateError,
+    CryptoError,
+    SolanaError,
+    TaskError,
+    ConfigurationError,
+    ResourceError,
+    CircuitBreakerError as CBError,
+    get_error_registry,
+    record_error,
+    wrap_exception,
+    is_retryable,
+    get_retry_delay,
+)
+from .telemetry import (
+    TelemetryManager,
+    TraceContext,
+    Span,
+    SpanKind,
+    SpanStatus,
+    Tracer,
+    Profiler,
+    SystemMonitor,
+    get_telemetry,
+    traced,
+    profiled,
+)
+
 __all__ = [
     # Config
     "config",
@@ -143,5 +205,39 @@ __all__ = [
     "CircuitState",
     "circuit_breaker",
     "circuit_registry",
+    # Crypto (v2.1)
+    "Ed25519",
+    "Base58",
+    "SolanaKeypair",
+    "ProofSigner",
+    "SignedProof",
+    "ProofHashchain",
+    "get_signer",
+    "sign_result",
+    "get_wallet_address",
+    # Backup (v2.1)
+    "BackupManager",
+    "RecoveryManager",
+    "StateSnapshot",
+    "get_backup_manager",
+    "quick_backup",
+    "quick_snapshot",
+    # Errors (v2.1)
+    "AgentError",
+    "ErrorCode",
+    "ErrorCategory",
+    "get_error_registry",
+    "record_error",
+    # Telemetry (v2.1)
+    "TelemetryManager",
+    "get_telemetry",
+    "traced",
+    "profiled",
+    # Watchdog
+    "Watchdog",
+    "get_watchdog",
+    # Shutdown
+    "GracefulShutdown",
+    "get_shutdown_handler",
 ]
 

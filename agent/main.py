@@ -1,6 +1,6 @@
 ﻿#!/usr/bin/env python3
 """
-Proof-of-Work Agent - Main Entry Point
+Proof-of-Work Agent - Main Entry Point (v2.1 Production)
 
 An autonomous AI agent for the Colosseum Solana Agent Hackathon that demonstrates
 the observe → think → act → verify loop.
@@ -8,16 +8,27 @@ the observe → think → act → verify loop.
 This is a long-running daemon (NOT a web server) designed for:
 - Render Background Worker (FREE tier)
 - 24/7 operation with automatic restarts
+- Self-healing with watchdog
+- Comprehensive telemetry and observability
+
+Features:
+- Circuit breaker for fault tolerance
+- Rate limiting for API protection
+- Cryptographic signing for proof verification
+- Automatic backup and recovery
+- Distributed tracing support
 
 Usage:
     python agent/main.py
 """
 
 import asyncio
+import atexit
 import os
 import signal
 import sys
 import traceback
+from datetime import datetime, timezone
 from pathlib import Path
 
 # Add parent directory to path for imports
@@ -25,17 +36,38 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from agent.config import config
 from agent.logger import get_logger
-from agent.loop import forever, AgentLoop
+
+# Import all modules for comprehensive functionality
+try:
+    from agent.loop import forever, AgentLoop
+    from agent.shutdown import ShutdownManager, get_shutdown_manager
+    from agent.watchdog import Watchdog
+    from agent.backup import get_backup_manager, quick_snapshot
+    from agent.telemetry import get_telemetry, TelemetryManager
+    from agent.crypto import get_signer, get_wallet_address
+    from agent.errors import get_error_registry
+    from agent.state import StateManager
+except ImportError as e:
+    print(f"Warning: Some modules not available: {e}")
+
+VERSION = "2.1.0"
+BUILD_DATE = "2026-02-05"
 
 
 def print_banner():
     """Print startup banner."""
-    banner = """
+    banner = f"""
 ╔═══════════════════════════════════════════════════════════════╗
 ║                    PROOF-OF-WORK AGENT                        ║
 ║              Colosseum Solana Agent Hackathon                 ║
 ╠═══════════════════════════════════════════════════════════════╣
+║  Version: {VERSION:<20}  Build: {BUILD_DATE:<12} ║
 ║  observe → think → act → verify                               ║
+╠═══════════════════════════════════════════════════════════════╣
+║  Features:                                                    ║
+║    ✓ Circuit Breaker    ✓ Rate Limiting                      ║
+║    ✓ Telemetry          ✓ Crypto Signing                     ║
+║    ✓ Auto Backup        ✓ Self-Healing                       ║
 ╚═══════════════════════════════════════════════════════════════╝
 """
     print(banner)
@@ -71,26 +103,88 @@ def validate_config():
     return True
 
 
-async def main():
-    """Main entry point."""
-    print_banner()
+def initialize_subsystems(log):
+    """Initialize all agent subsystems."""
+    initialized = []
     
-    log = get_logger("main")
+    # Initialize telemetry
+    try:
+        telemetry = get_telemetry()
+        telemetry.configure_output(Path("data/telemetry"))
+        initialized.append("telemetry")
+        log.info("✓ Telemetry system initialized")
+    except Exception as e:
+        log.warn(f"✗ Telemetry init failed: {e}")
     
-    # Validate configuration
-    validate_config()
+    # Initialize crypto signer
+    try:
+        signer = get_signer()
+        wallet = get_wallet_address()
+        initialized.append("crypto")
+        log.info(f"✓ Crypto signer initialized: {wallet[:16]}...")
+    except Exception as e:
+        log.warn(f"✗ Crypto signer init failed: {e}")
     
-    # Setup signal handlers for graceful shutdown
-    agent = AgentLoop()
+    # Initialize backup system
+    try:
+        backup_mgr = get_backup_manager()
+        initialized.append("backup")
+        log.info("✓ Backup system initialized")
+    except Exception as e:
+        log.warn(f"✗ Backup system init failed: {e}")
     
-    def signal_handler(signum, frame):
-        log.info(f"Received signal {signum}, initiating shutdown...")
+    # Create startup snapshot
+    try:
+        snapshot_name = quick_snapshot("startup")
+        log.info(f"✓ Startup snapshot created: {snapshot_name}")
+    except Exception as e:
+        log.warn(f"✗ Startup snapshot failed: {e}")
+    
+    return initialized
+
+
+def setup_shutdown_handlers(agent, log):
+    """Setup graceful shutdown handlers."""
+    shutdown_manager = get_shutdown_manager()
+    
+    # Register shutdown hooks
+    @shutdown_manager.register(priority=100, timeout=5.0)
+    def save_state():
+        log.info("Saving agent state...")
+        try:
+            quick_snapshot("shutdown")
+            log.info("State saved successfully")
+        except Exception as e:
+            log.error(f"Failed to save state: {e}")
+    
+    @shutdown_manager.register(priority=90, timeout=3.0)
+    def stop_agent():
+        log.info("Stopping agent loop...")
         agent.stop()
+    
+    @shutdown_manager.register(priority=80, timeout=5.0)
+    def stop_telemetry():
+        log.info("Stopping telemetry...")
+        try:
+            get_telemetry().stop()
+        except:
+            pass
+    
+    @shutdown_manager.register(priority=10, timeout=2.0)
+    def final_log():
+        log.info("Shutdown complete. Goodbye!")
+    
+    # Signal handlers
+    def signal_handler(signum, frame):
+        sig_name = signal.Signals(signum).name
+        log.info(f"Received {sig_name}, initiating graceful shutdown...")
+        asyncio.create_task(shutdown_manager.shutdown())
     
     # Register signal handlers
     if sys.platform != "win32":
         signal.signal(signal.SIGTERM, signal_handler)
         signal.signal(signal.SIGINT, signal_handler)
+        signal.signal(signal.SIGHUP, signal_handler)
     else:
         signal.signal(signal.SIGINT, signal_handler)
         try:
@@ -98,22 +192,101 @@ async def main():
         except AttributeError:
             pass
     
-    log.info("Starting Proof-of-Work Agent...")
-    log.info(f"PID: {os.getpid()}")
-    log.info(f"Python: {sys.version}")
+    # Also register with atexit
+    atexit.register(shutdown_manager.sync_shutdown)
+    
+    return shutdown_manager
+
+
+async def run_with_watchdog(agent, log):
+    """Run agent with watchdog supervision."""
+    watchdog = Watchdog(check_interval=30.0)
+    
+    # Add health checks
+    def check_agent_alive():
+        return agent.running if hasattr(agent, 'running') else True
+    
+    def check_memory():
+        try:
+            import psutil
+            mem = psutil.virtual_memory()
+            return mem.percent < 90
+        except:
+            return True
+    
+    watchdog.add_check("agent_alive", check_agent_alive)
+    watchdog.add_check("memory_ok", check_memory)
+    
+    # Add recovery action
+    def restart_agent():
+        log.warn("Watchdog triggering agent restart...")
+        agent.stop()
+        asyncio.create_task(forever())
+    
+    watchdog.add_recovery("restart", restart_agent)
+    
+    # Start watchdog
+    watchdog_task = asyncio.create_task(watchdog.run())
     
     try:
-        # Run the agent loop forever
+        # Start telemetry collection
+        await get_telemetry().start()
+        
+        # Run the agent loop
         await forever()
+    finally:
+        watchdog.stop()
+        await watchdog_task
+
+
+async def main():
+    """Main entry point."""
+    print_banner()
+    
+    log = get_logger("main")
+    log.info(f"POW Agent v{VERSION} starting...")
+    log.info(f"Timestamp: {datetime.now(timezone.utc).isoformat()}")
+    
+    # Validate configuration
+    validate_config()
+    
+    # Initialize subsystems
+    initialized = initialize_subsystems(log)
+    log.info(f"Initialized {len(initialized)} subsystems: {', '.join(initialized)}")
+    
+    # Setup agent
+    agent = AgentLoop()
+    
+    # Setup shutdown handlers
+    shutdown_manager = setup_shutdown_handlers(agent, log)
+    
+    log.info("=" * 60)
+    log.info("Starting Proof-of-Work Agent...")
+    log.info(f"PID: {os.getpid()}")
+    log.info(f"Python: {sys.version.split()[0]}")
+    log.info(f"Platform: {sys.platform}")
+    log.info("=" * 60)
+    
+    try:
+        # Run with watchdog supervision
+        await run_with_watchdog(agent, log)
     except KeyboardInterrupt:
         log.info("Keyboard interrupt received")
+    except asyncio.CancelledError:
+        log.info("Agent task cancelled")
     except Exception as e:
         log.error(f"Fatal error: {e}")
-        import traceback
         traceback.print_exc()
+        
+        # Record error for post-mortem
+        try:
+            get_error_registry().record(e)
+        except:
+            pass
+        
         sys.exit(1)
     finally:
-        log.info("Agent shutdown complete")
+        log.info("Agent main loop exited")
 
 
 if __name__ == "__main__":
