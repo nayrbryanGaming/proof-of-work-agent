@@ -9,6 +9,10 @@ python-dotenv>=1.0.0
 rich>=13.7.0
 tenacity>=8.2.3
 
+# Solana blockchain integration - REQUIRED for transaction proof
+solana>=0.34.0
+solders>=0.21.0
+
 # Async support
 aiohttp>=3.9.0
 asyncio-throttle>=1.0.2
