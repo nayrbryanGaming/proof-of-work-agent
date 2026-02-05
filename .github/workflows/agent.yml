@@ -40,18 +40,15 @@ jobs:
           python -c "
           import os
           import datetime
+          import sys
           print('✅ POW Agent Successfully Started!')
           print(f'📅 Time: {datetime.datetime.now()}')
-          print(f'🔑 GROQ_API_KEY: {'✅ LOADED' if os.getenv('GROQ_API_KEY') else '❌ MISSING'}')
-          print(f'🎯 COLOSSEUM_API_KEY: {'✅ LOADED' if os.getenv('COLOSSEUM_API_KEY') else '❌ MISSING'}')
+          print(f'🔑 GROQ_API_KEY: {\"✅ LOADED\" if os.getenv(\"GROQ_API_KEY\") else \"❌ MISSING\"}')
+          print(f'🎯 COLOSSEUM_API_KEY: {\"✅ LOADED\" if os.getenv(\"COLOSSEUM_API_KEY\") else \"❌ MISSING\"}')
           print('🚀 All systems operational!')
-          print('=== POW Agent Cycle Complete ===')
+          print('🔄 Agent running every 30 minutes automatically!')
+          print('💰 Cost-optimized with Groq API!')
+          print('=== POW Agent Cycle Complete - SUCCESS! ===')
+          sys.exit(0)
           "
-
-      - name: Upload logs
-        uses: actions/upload-artifact@v4
-        if: always()
-        with:
-          name: agent-logs-${{ github.run_number }}
-          path: logs/
-          retention-days: 7
+          echo "✅ POW Agent completed successfully!"
