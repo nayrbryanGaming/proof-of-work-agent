@@ -50,7 +50,8 @@ jobs:
           GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}
           AGENTWALLET_SESSION: ${{ secrets.AGENTWALLET_SESSION }}
           PROGRAM_ID: "BountyProgram1111111111111111111111111111"
-          SOLANA_RPC: https://api.devnet.solana.com
+          SOLANA_RPC_DEVNET: https://api.devnet.solana.com
+          SOLANA_RPC_TESTNET: https://api.testnet.solana.com
           GITHUB_ACTIONS: "true"
         run: |
           echo "� EMERGENCY BLOCKCHAIN PROOF FOR BOSS!"
