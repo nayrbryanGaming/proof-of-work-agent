@@ -8,6 +8,7 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import json
+import os
 import time
 from pathlib import Path
 from typing import List, Dict, Optional
@@ -22,7 +23,27 @@ from colosseum.api import ColosseumAPI
 from colosseum.forum import run as run_forum, ForumHandler
 from colosseum.project import ensure_project, build_update_text, ProjectManager
 from colosseum.status import should_act, StatusChecker
-from solana.client import SolanaClient
+
+# Lazy import SolanaClient to allow running without PROGRAM_ID
+_solana_client = None
+
+def get_solana_client():
+    """Get Solana client, or None if not configured."""
+    global _solana_client
+    if _solana_client is not None:
+        return _solana_client
+    
+    program_id = os.getenv("PROGRAM_ID", "").strip()
+    if not program_id:
+        return None
+    
+    try:
+        from solana.client import SolanaClient
+        _solana_client = SolanaClient()
+        return _solana_client
+    except Exception as e:
+        get_logger("loop").warn(f"Solana client not available: {e}")
+        return None
 
 _TASKS_PATH = Path(__file__).resolve().parents[1] / "tasks" / "sample_tasks.json"
 
@@ -55,8 +76,14 @@ def _pick_task(tasks: List[Dict], cycle: int = 0) -> Optional[Dict]:
     return tasks[cycle % len(tasks)]
 
 
-async def run_cycle(api: ColosseumAPI, solana: SolanaClient, cycle_num: int = 0) -> CycleResult:
-    """Run a single observe → think → act → verify cycle."""
+async def run_cycle(api: ColosseumAPI, solana, cycle_num: int = 0) -> CycleResult:
+    """Run a single observe → think → act → verify cycle.
+    
+    Args:
+        api: Colosseum API client
+        solana: Solana client or None if not configured
+        cycle_num: Current cycle number
+    """
     log = get_logger("loop")
     start_time = time.time()
     errors: list[str] = []
@@ -131,8 +158,8 @@ async def run_cycle(api: ColosseumAPI, solana: SolanaClient, cycle_num: int = 0)
     else:
         log.warn("No tasks found.")
 
-    # ACT: submit proof on Solana
-    if task_hash:
+    # ACT: submit proof on Solana (if configured)
+    if task_hash and solana is not None:
         log.info("ACT: submit proof on Solana")
         try:
             solana_tx = solana.submit_proof(task_hash)
@@ -140,9 +167,12 @@ async def run_cycle(api: ColosseumAPI, solana: SolanaClient, cycle_num: int = 0)
         except Exception as e:
             log.error(f"Solana submission failed: {e}")
             errors.append(str(e))
+    elif task_hash:
+        log.warn("ACT: Solana not configured, skipping on-chain submission")
+        log.info(f"Would submit proof hash: {task_hash[:32]}...")
 
-    # VERIFY: transaction status
-    if solana_tx:
+    # VERIFY: transaction status (if we have a tx)
+    if solana_tx and solana is not None:
         log.info("VERIFY: transaction status")
         try:
             verified = solana.verify_signature(solana_tx)
@@ -187,7 +217,13 @@ async def forever() -> None:
     log.info("="*50)
     
     api = ColosseumAPI()
-    solana = SolanaClient()
+    solana = get_solana_client()  # May return None if not configured
+    
+    if solana is None:
+        log.warn("Solana client not configured - running in TEST MODE")
+        log.warn("Set PROGRAM_ID to enable on-chain proof submission")
+    else:
+        log.info("Solana client initialized - on-chain mode enabled")
     
     cycle_num = 0
     interval = config.agent.loop_interval if hasattr(config, 'agent') else 1800
@@ -255,9 +291,10 @@ class AgentLoop:
         return self._forum
     
     @property
-    def solana(self) -> SolanaClient:
+    def solana(self):
+        """Get Solana client, or None if not configured."""
         if self._solana is None:
-            self._solana = SolanaClient()
+            self._solana = get_solana_client()
         return self._solana
     
     async def run_cycle(self) -> CycleResult:

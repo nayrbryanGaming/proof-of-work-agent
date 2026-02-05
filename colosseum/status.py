@@ -45,23 +45,33 @@ class AgentStatus:
 
 
 def should_act(status: dict) -> bool:
-    """Determine if agent should act based on status."""
+    """Determine if agent should act based on status.
+    
+    Returns True if agent should perform actions this cycle.
+    Always returns True unless explicitly told to pause/stop.
+    """
     if not isinstance(status, dict):
         return True
     
+    # Check for explicit pause/stop signals
     state = status.get("status")
     if isinstance(status.get("agent"), dict) and not state:
         state = status["agent"].get("status")
     
+    # Only return False if explicitly paused/stopped
     if state:
-        return str(state).lower() in ("active", "running")
+        state_lower = str(state).lower()
+        if state_lower in ("paused", "stopped", "disabled", "banned"):
+            return False
     
+    # Check nextSteps for pause signals
     next_steps = status.get("nextSteps")
     if isinstance(next_steps, list):
         joined = " ".join([str(s).lower() for s in next_steps])
         if any(k in joined for k in ["pause", "wait", "stop"]):
             return False
     
+    # Default: always act!
     return True
 
 

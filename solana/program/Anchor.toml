@@ -1,6 +1,7 @@
 ﻿[features]
 seeds = true
 skip-lint = false
+resolution = true
 
 [programs.devnet]
 pow_bounty = "4Jg9fBRCYguygWsYzZEuFaDfpWH5Ffxa7LQLwnatuh5r"
@@ -8,9 +9,21 @@ pow_bounty = "4Jg9fBRCYguygWsYzZEuFaDfpWH5Ffxa7LQLwnatuh5r"
 [programs.localnet]
 pow_bounty = "4Jg9fBRCYguygWsYzZEuFaDfpWH5Ffxa7LQLwnatuh5r"
 
+[registry]
+url = "https://api.apr.dev"
+
 [provider]
 cluster = "devnet"
 wallet = "~/.config/solana/id.json"
 
 [scripts]
 test = "anchor test"
+build = "anchor build"
+deploy = "anchor deploy --provider.cluster devnet"
+
+[test]
+startup_wait = 5000
+
+[test.validator]
+url = "https://api.devnet.solana.com"
+

@@ -113,6 +113,10 @@ from .rate_limiter import (
     solana_limiter,
 )
 
+# Self-healing and shutdown
+from .watchdog import Watchdog, get_watchdog, RecoveryAction
+from .shutdown import GracefulShutdown, get_shutdown_handler
+
 __all__ = [
     # Config
     "config",
