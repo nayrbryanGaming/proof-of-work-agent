@@ -41,7 +41,7 @@ from agent.logger import get_logger
 try:
     from agent.loop import forever, AgentLoop
     from agent.shutdown import ShutdownManager, get_shutdown_manager
-    from agent.watchdog import Watchdog
+    from agent.watchdog import Watchdog, RecoveryAction
     from agent.backup import get_backup_manager, quick_snapshot
     from agent.telemetry import get_telemetry, TelemetryManager
     from agent.crypto import get_signer, get_wallet_address
@@ -50,7 +50,7 @@ try:
 except ImportError as e:
     print(f"Warning: Some modules not available: {e}")
 
-VERSION = "2.1.0"
+VERSION = "2.2.0"
 BUILD_DATE = "2026-02-05"
 
 
@@ -200,7 +200,7 @@ def setup_shutdown_handlers(agent, log):
 
 async def run_with_watchdog(agent, log):
     """Run agent with watchdog supervision."""
-    watchdog = Watchdog(check_interval=30.0)
+    watchdog = Watchdog()
     
     # Add health checks
     def check_agent_alive():
@@ -211,32 +211,35 @@ async def run_with_watchdog(agent, log):
             import psutil
             mem = psutil.virtual_memory()
             return mem.percent < 90
-        except:
+        except Exception:
             return True
     
-    watchdog.add_check("agent_alive", check_agent_alive)
-    watchdog.add_check("memory_ok", check_memory)
+    watchdog.register_check("agent_alive", check_agent_alive, interval=30.0)
+    watchdog.register_check("memory_ok", check_memory, interval=60.0)
     
     # Add recovery action
     def restart_agent():
         log.warn("Watchdog triggering agent restart...")
-        agent.stop()
+        if hasattr(agent, 'stop'):
+            agent.stop()
         asyncio.create_task(forever())
     
-    watchdog.add_recovery("restart", restart_agent)
+    watchdog.register_recovery_handler(RecoveryAction.FULL_RESTART, restart_agent)
     
     # Start watchdog
-    watchdog_task = asyncio.create_task(watchdog.run())
+    await watchdog.start()
     
     try:
         # Start telemetry collection
-        await get_telemetry().start()
+        try:
+            await get_telemetry().start()
+        except Exception as e:
+            log.warn(f"Telemetry start failed: {e}")
         
         # Run the agent loop
         await forever()
     finally:
-        watchdog.stop()
-        await watchdog_task
+        await watchdog.stop()
 
 
 async def main():

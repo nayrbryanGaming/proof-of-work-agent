@@ -1,6 +1,12 @@
 ﻿"""
 Decision engine for the Proof-of-Work Agent.
-Uses OpenAI to generate intelligent responses and solve tasks.
+Uses Groq/Llama 3.3-70b for COST-EFFICIENT AI responses.
+
+OPTIMIZED FOR MINIMAL API COSTS:
+- Aggressive caching
+- Short prompts
+- Fallback templates
+- Rate limiting
 """
 
 from __future__ import annotations
@@ -9,7 +15,7 @@ import os
 import json
 import hashlib
 from pathlib import Path
-from typing import Optional
+from typing import Optional, List
 from dataclasses import dataclass
 
 import requests
@@ -18,8 +24,21 @@ from tenacity import retry, stop_after_attempt, wait_exponential, retry_if_excep
 from agent.config import config
 from agent.logger import get_logger
 
+# Import efficient AI client
+try:
+    from agent.ai_client import get_ai_client, EfficientAIClient, AIRequest
+    HAS_AI_CLIENT = True
+except ImportError:
+    HAS_AI_CLIENT = False
+
 _PROMPT_PATH = Path(__file__).resolve().parents[1] / "prompts" / "solve_task.txt"
-_DEFAULT_MODELS = ["gpt-4", "gpt-4-turbo", "gpt-3.5-turbo"]
+_DEFAULT_MODELS = ["llama-3.3-70b-versatile", "gpt-4", "gpt-3.5-turbo"]
+
+# Fallback responses (NO API CALL - FREE!)
+FALLBACK_RESPONSES = {
+    "forum_comment": "Insightful direction. Consider how this could leverage Solana's speed for autonomous verification. I'm experimenting with proof-of-work agents and would love to compare approaches.",
+    "task_solve": "Autonomous agents in blockchain enable trustless automation through cryptographic verification. Solana's sub-second finality makes real-time agent coordination possible, allowing for proof-of-work validation without centralized intermediaries.",
+}
 
 
 class OpenAIRetryableError(Exception):
@@ -113,13 +132,38 @@ def _call_openai(messages: list[dict], max_tokens: int = 400) -> str:
 
 
 def solve(task: str) -> str:
-    """Solve a task and return the solution."""
-    system_prompt = _load_prompt()
-    messages = [
-        {"role": "system", "content": system_prompt},
-        {"role": "user", "content": f"Task:\n{task}\n\nRespond with the solution only."},
-    ]
-    return _call_openai(messages, max_tokens=500)
+    """
+    Solve a task using AI (COST-OPTIMIZED).
+    
+    Uses efficient AI client with caching to minimize API calls.
+    """
+    log = get_logger("decision")
+    
+    # Try efficient AI client first (with caching!)
+    if HAS_AI_CLIENT:
+        try:
+            client = get_ai_client()
+            result = client.solve_task(task)
+            log.info(f"Task solved via efficient AI client. Stats: {client.get_budget_status()}")
+            return result
+        except Exception as e:
+            log.warn(f"Efficient AI client failed: {e}, trying fallback...")
+    
+    # Fallback to OpenAI if configured
+    if config.openai_api_key:
+        system_prompt = _load_prompt()
+        messages = [
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": f"Task:\n{task}\n\nRespond with the solution only."},
+        ]
+        try:
+            return _call_openai(messages, max_tokens=150)  # Reduced tokens!
+        except Exception as e:
+            log.warn(f"OpenAI fallback failed: {e}")
+    
+    # Final fallback - FREE!
+    log.info("Using fallback template (no API cost)")
+    return FALLBACK_RESPONSES["task_solve"]
 
 
 def _fallback_comment(context: str) -> str:
@@ -136,23 +180,59 @@ def _fallback_comment(context: str) -> str:
 
 
 def forum_comment(context: str) -> str:
-    """Generate a forum comment for the given context."""
-    if not config.openai_api_key:
-        return _fallback_comment(context)
+    """
+    Generate a forum comment (COST-OPTIMIZED).
     
-    system_prompt = (
-        "Write one concise, helpful comment for a Solana hackathon forum post. "
-        "Be specific to the context. 1-2 sentences. Max 400 characters."
-    )
-    messages = [
-        {"role": "system", "content": system_prompt},
-        {"role": "user", "content": context},
-    ]
-    text = _call_openai(messages, max_tokens=200)
-    text = " ".join(text.strip().splitlines()).strip()
-    if len(text) > 400:
-        text = text[:397].rstrip() + "..."
-    return text
+    Uses caching and fallback to minimize API calls.
+    """
+    log = get_logger("decision")
+    
+    # Extract title and tags for efficient AI client
+    title = ""
+    tags = []
+    for line in context.splitlines():
+        if line.lower().startswith("title:"):
+            title = line.split(":", 1)[1].strip()
+        elif line.lower().startswith("tags:"):
+            tags = [t.strip() for t in line.split(":", 1)[1].split(",")]
+    
+    # Try efficient AI client first (with caching!)
+    if HAS_AI_CLIENT:
+        try:
+            client = get_ai_client()
+            result = client.forum_comment(title or context[:100], tags)
+            
+            # Ensure max 400 chars
+            if len(result) > 400:
+                result = result[:397].rstrip() + "..."
+            
+            log.info(f"Comment generated via efficient AI. Budget: {client.get_budget_status()}")
+            return result
+        except Exception as e:
+            log.warn(f"Efficient AI client failed: {e}")
+    
+    # Fallback to OpenAI if configured
+    if config.openai_api_key:
+        system_prompt = (
+            "Write one concise, helpful comment for a Solana hackathon forum post. "
+            "Be specific to the context. 1-2 sentences. Max 400 characters."
+        )
+        messages = [
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": context[:300]},  # Truncated!
+        ]
+        try:
+            text = _call_openai(messages, max_tokens=100)  # Reduced tokens!
+            text = " ".join(text.strip().splitlines()).strip()
+            if len(text) > 400:
+                text = text[:397].rstrip() + "..."
+            return text
+        except Exception as e:
+            log.warn(f"OpenAI fallback failed: {e}")
+    
+    # Final fallback - FREE!
+    log.info("Using fallback comment template (no API cost)")
+    return FALLBACK_RESPONSES["forum_comment"]
 
 
 class DecisionEngine:

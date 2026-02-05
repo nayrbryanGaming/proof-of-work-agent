@@ -354,7 +354,14 @@ class Profiler:
             yield
             return
         
-        import resource if sys.platform != 'win32' else None
+        # Platform-specific resource import
+        resource = None
+        if sys.platform != 'win32':
+            try:
+                import resource as res_module
+                resource = res_module
+            except ImportError:
+                pass
         
         # Start measurements
         start_time = time.time()
@@ -362,7 +369,7 @@ class Profiler:
         
         try:
             start_mem = self._get_memory_usage()
-        except:
+        except Exception:
             start_mem = 0
         
         try:

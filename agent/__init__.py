@@ -179,6 +179,65 @@ from .telemetry import (
     profiled,
 )
 
+# Security module (v2.2)
+try:
+    from .security import (
+        SecurityManager,
+        SecurityConfig,
+        SecurityRateLimiter,
+        InputValidator,
+        NonceManager,
+        HMACVerifier,
+        SecretManager,
+        get_security_manager,
+        init_security,
+        generate_api_key,
+        generate_session_token,
+        rate_limited,
+        validated_input,
+    )
+except ImportError:
+    pass
+
+# File locking (v2.2)
+try:
+    from .file_lock import (
+        FileLockManager,
+        AtomicFileWriter,
+        StateFileLock,
+        get_file_lock_manager,
+        atomic_write,
+        atomic_read,
+    )
+except ImportError:
+    pass
+
+# Connection pool (v2.2)
+try:
+    from .connection_pool import (
+        ConnectionPool,
+        RetryQueue,
+        ResilientHttpClient,
+        RequestConfig,
+        RequestResult,
+        get_http_client,
+        get_connection_pool,
+    )
+except ImportError:
+    pass
+
+# Efficient AI client (v2.2)
+try:
+    from .ai_client import (
+        EfficientAIClient,
+        AIRequest,
+        get_ai_client,
+        quick_solve,
+        quick_comment,
+    )
+except ImportError:
+    pass
+
 __all__ = [
     # Config
     "config",
