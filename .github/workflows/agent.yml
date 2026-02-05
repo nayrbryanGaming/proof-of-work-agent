@@ -25,7 +25,6 @@ jobs:
 
       - name: Install dependencies
         run: |
-          cd pow-agent
           pip install -r requirements.txt
 
       - name: Run POW Agent Cycle
@@ -37,7 +36,6 @@ jobs:
           SOLANA_RPC: https://api.devnet.solana.com
           GITHUB_ACTIONS: "true"
         run: |
-          cd pow-agent
           python -c "
 import asyncio
 import sys
@@ -82,5 +80,5 @@ sys.exit(asyncio.run(main()))
         if: always()
         with:
           name: agent-logs-${{ github.run_number }}
-          path: pow-agent/logs/
+          path: logs/
           retention-days: 7
